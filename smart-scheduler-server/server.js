@@ -1,4 +1,7 @@
+require('dotenv').config(); // Phải nằm ở trên cùng
 const express = require('express');
+// ...
+
 const mongoose = require('mongoose');
 const cors = require('cors');
 
@@ -7,7 +10,9 @@ app.use(cors());
 app.use(express.json());
 
 // Kết nối MongoDB
-const mongoURI = "mongodb+srv://kha70929_db_user:HJ23bYNBlFbaz4Ae@rabbitankcluster.zbptpmd.mongodb.net/SmartScheduler?retryWrites=true&w=majority";
+const mongoURI = process.env.MONGO_URI; 
+const PORT = process.env.PORT || 5000;
+
 mongoose.connect(mongoURI)
   .then(() => console.log("✅ Đã kết nối RabbiTankCluster thành công!"))
   .catch(err => console.log("❌ Lỗi kết nối:", err));
@@ -72,4 +77,5 @@ app.post('/api/timers', async (req, res) => {
   }
 });
 
-app.listen(5000, () => console.log("🚀 Server đang chạy tại port 5000"));
+// Render cần sử dụng port mà nó cấp phát, không phải lúc nào cũng là 5000
+app.listen(PORT, () => console.log(`🚀 Server đang chạy tại port ${PORT}`));
