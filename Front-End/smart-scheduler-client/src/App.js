@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-// THAY ĐỔI Ở ĐÂY: Dán link Render của bạn vào đây (nhớ bỏ dấu / ở cuối)
-const API_BASE_URL = "https://arcsystem-backend.onrender.com"; 
+// Lấy link từ biến môi trường, nếu không có thì mặc định dùng localhost (để bạn vẫn test được ở máy)
+const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:5000"; 
 
 function App() {
   const [timers, setTimers] = useState([]);
@@ -11,7 +11,6 @@ function App() {
 
   const fetchTimers = async () => {
     try {
-      // SỬA: Dùng API_BASE_URL
       const res = await axios.get(`${API_BASE_URL}/api/timers/next`);
       setTimers(res.data);
     } catch (err) {
@@ -28,7 +27,6 @@ function App() {
     const timestamp = Math.floor(new Date(dateTime).getTime() / 1000);
     
     try {
-      // SỬA: Dùng API_BASE_URL
       await axios.post(`${API_BASE_URL}/api/timers`, {
         title: title,
         trigger_at: timestamp
@@ -40,13 +38,10 @@ function App() {
     }
   };
 
-  // ... (Phần return bên dưới giữ nguyên)
-
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial' }}>
       <h1>⏱️ RabbitTank Scheduler</h1>
       
-      {/* Form thêm mới */}
       <form onSubmit={addTimer} style={{ marginBottom: '30px' }}>
         <input 
           type="text" placeholder="Tiêu đề..." value={title}
@@ -59,7 +54,6 @@ function App() {
         <button type="submit">Thêm Timer</button>
       </form>
 
-      {/* Danh sách hiển thị */}
       <h2>3 Task sắp tới (Cho ESP32):</h2>
       <ul>
         {timers.map(t => (
