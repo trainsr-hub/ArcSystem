@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
+// THAY ĐỔI Ở ĐÂY: Dán link Render của bạn vào đây (nhớ bỏ dấu / ở cuối)
+const API_BASE_URL = "https://arcsystem-backend.onrender.com"; 
+
 function App() {
   const [timers, setTimers] = useState([]);
   const [title, setTitle] = useState('');
   const [dateTime, setDateTime] = useState('');
 
-  // 1. Lấy danh sách 3 Timer gần nhất từ Server
   const fetchTimers = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/timers/next');
+      // SỬA: Dùng API_BASE_URL
+      const res = await axios.get(`${API_BASE_URL}/api/timers/next`);
       setTimers(res.data);
     } catch (err) {
       console.error("Lỗi lấy dữ liệu:", err);
@@ -20,22 +23,24 @@ function App() {
     fetchTimers();
   }, []);
 
-  // 2. Hàm thêm Timer mới
   const addTimer = async (e) => {
     e.preventDefault();
     const timestamp = Math.floor(new Date(dateTime).getTime() / 1000);
     
     try {
-      await axios.post('http://localhost:5000/api/timers', {
+      // SỬA: Dùng API_BASE_URL
+      await axios.post(`${API_BASE_URL}/api/timers`, {
         title: title,
         trigger_at: timestamp
       });
       setTitle('');
-      fetchTimers(); // Cập nhật lại danh sách ngay lập tức
+      fetchTimers();
     } catch (err) {
       alert("Lỗi khi lưu dữ liệu!");
     }
   };
+
+  // ... (Phần return bên dưới giữ nguyên)
 
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial' }}>
