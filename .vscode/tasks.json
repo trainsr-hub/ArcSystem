@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Backend",
+            "type": "shell",
+            "command": "node server.js",
+            "options": {
+                "cwd": "${workspaceFolder}/smart-scheduler-server"
+            },
+            "presentation": {
+                "group": "my-system",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "Run Frontend",
+            "type": "shell",
+            "command": "npm start",
+            "options": {
+                "cwd": "${workspaceFolder}/Front-End/smart-scheduler-client"
+            },
+            "presentation": {
+                "group": "my-system",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "🚀 KHOI DONG HE THONG",
+            "dependsOn": ["Run Backend", "Run Frontend"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "focus": true
+            }
+        }
+    ]
+}
