@@ -1,251 +1,109 @@
-
-#include <Arduino.h>
+// src/main.cpp
 #include <WiFi.h>
-#include <Firebase_ESP_Client.h>
-
-#include "addons/TokenHelper.h"
-#include "addons/RTDBHelper.h"
 #include "secrets.h"
 
-// ========================================================
-// 1. SENSOR AND TIMING CONFIGURATION
-// ========================================================
+const char* ssid     = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
-const uint8_t LDR_PIN = 36;
+const int LED_STATUS_PIN = 15; // D15: LED trạng thái mạng
+const int LED_WEAK_PIN   = 2;  // D2:  LED mức 1 (Sóng yếu)
+const int LED_MED_PIN    = 4;  // D4:  LED mức 2 (Sóng trung bình)
+const int LED_STRONG_PIN = 16; // D16: LED mức 3 (Sóng mạnh)
 
-// Serial updates every 100 ms
-const unsigned long SERIAL_INTERVAL_MS = 100;
-
-// Cloud updates every 15 seconds
-const unsigned long CLOUD_INTERVAL_MS = 15000;
-
-// Device-specific Firebase path
-const String DEVICE_PATH = String("devices/") + USER_UID;
-
-// ========================================================
-// 2. FIREBASE OBJECTS
-// ========================================================
-
-FirebaseData fbdo;
-FirebaseAuth auth;
-FirebaseConfig config;
-
-// ========================================================
-// 3. SHARED SENSOR DATA
-// ========================================================
-
-float ldrVoltage = 0.0f;
-int adcValue = 0;
-bool hasSensorReading = false;
-
-// Protect shared sensor data across FreeRTOS tasks
-portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
-
-// ========================================================
-// 4. TIMERS AND STATUS
-// ========================================================
-
-unsigned long lastSerialReadMs = 0;
-unsigned long lastWiFiLogMs = 0;
-
-bool wifiMessagePrinted = false;
-
-// ========================================================
-// 5. FIREBASE TASK
-// ========================================================
-
-void firebaseTask(void *parameter) {
-  Serial.println("[FirebaseTask] Waiting for Wi-Fi...");
-
-  // Wait for Wi-Fi without blocking the sensor loop
-  while (WiFi.status() != WL_CONNECTED) {
-    vTaskDelay(pdMS_TO_TICKS(500));
-  }
-
-  Serial.println("[FirebaseTask] Wi-Fi connected.");
-
-  // Configure Firebase authentication
-  config.api_key = API_KEY;
-  config.database_url = DATABASE_URL;
-
-  auth.user.email = USER_EMAIL;
-  auth.user.password = USER_PASSWORD;
-
-  config.token_status_callback = tokenStatusCallback;
-
-  // Limit socket and server-response waiting time
-  config.timeout.socketConnection = 10000;
-  config.timeout.serverResponse = 10000;
-
-  Serial.println("[FirebaseTask] Starting Firebase.begin()...");
-
-  // This call may take time, but it runs separately from
-  // the sensor-reading loop.
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
-
-  Serial.println("[FirebaseTask] Firebase.begin() returned.");
-
-  unsigned long lastCloudWriteMs = 0;
-  int count = 0;
-
-  // Keep handling Firebase authentication and cloud writes
-  for (;;) {
-    unsigned long now = millis();
-
-    // Firebase.ready() handles ongoing authentication tasks
-    if (Firebase.ready() &&
-        (lastCloudWriteMs == 0 ||
-         now - lastCloudWriteMs >= CLOUD_INTERVAL_MS)) {
-
-      bool readingAvailable;
-      float voltageToSend;
-
-      // Read a consistent snapshot of the latest sensor data
-      portENTER_CRITICAL(&sensorMux);
-      readingAvailable = hasSensorReading;
-      voltageToSend = ldrVoltage;
-      portEXIT_CRITICAL(&sensorMux);
-
-      if (readingAvailable) {
-        lastCloudWriteMs = now;
-
-        int countToSend = count++;
-
-        // Write count to test/int
-        bool intAccepted = Firebase.RTDB.setIntAsync(
-          &fbdo,
-          DEVICE_PATH + "/test/int",
-          countToSend
-        );
-
-        // Write voltage to test/float
-        bool floatAccepted = Firebase.RTDB.setFloatAsync(
-          &fbdo,
-          DEVICE_PATH + "/test/float",
-          voltageToSend
-        );
-
-        Serial.printf(
-          "[CLOUD] int=%s | float=%s | voltage=%.3f V\n",
-          intAccepted ? "ACCEPTED" : "FAILED",
-          floatAccepted ? "ACCEPTED" : "FAILED",
-          voltageToSend
-        );
-      }
-    }
-
-    // Allow the task to yield CPU time
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
-}
-
-/* ========================================================
-   FIREBASE TASK NOTES
-   - Firebase authentication runs separately from loop().
-   - A stalled Firebase initialization should not stop the
-     Arduino loop from printing sensor readings.
-   - ACCEPTED means the async request was accepted by the
-     library, not that the database confirmed the write.
-   ======================================================== */
-
-// ========================================================
-// 6. SETUP
-// ========================================================
+void tatToanBoLedSong();
+void xuatTrangThaiHeThong(bool daKetNoi, long rssi);
+void inTrangThaiGPIO(uint8_t status, uint8_t weak, uint8_t med, uint8_t strong);
 
 void setup() {
   Serial.begin(115200);
 
-  // Configure ADC
-  pinMode(LDR_PIN, INPUT);
-  analogReadResolution(12);
+  pinMode(LED_STATUS_PIN, OUTPUT);
+  pinMode(LED_WEAK_PIN, OUTPUT);
+  pinMode(LED_MED_PIN, OUTPUT);
+  pinMode(LED_STRONG_PIN, OUTPUT);
 
-  Serial.println();
-  Serial.println("================================");
-  Serial.println(" ESP32 LDR Monitor + Firebase");
-  Serial.println("================================");
+  digitalWrite(LED_STATUS_PIN, LOW);
+  tatToanBoLedSong();
 
-  Serial.printf("LDR GPIO: %u\n", LDR_PIN);
-  Serial.printf("Serial interval: %lu ms\n", SERIAL_INTERVAL_MS);
-  Serial.printf("Cloud interval: %lu ms\n", CLOUD_INTERVAL_MS);
+  Serial.println("\n--- Start ---");
+  WiFi.begin(ssid, password);
 
-  // Start Wi-Fi connection without waiting for success
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.println("[WiFi] Connection started.");
-
-  // Run Firebase on a separate FreeRTOS task pinned to core 0.
-  // The Arduino loop can continue sampling and printing on core 1.
-  BaseType_t taskCreated = xTaskCreatePinnedToCore(
-    firebaseTask,
-    "FirebaseTask",
-    12288,
-    nullptr,
-    1,
-    nullptr,
-    0
-  );
-
-  if (taskCreated == pdPASS) {
-    Serial.println("[SYSTEM] Firebase task created.");
-  } else {
-    Serial.println("[ERROR] Failed to create Firebase task.");
+  // Nhấp nháy LED STATUS khi đang dò mạng, 3 LED sóng tắt hoàn toàn
+  while (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_STATUS_PIN, !digitalRead(LED_STATUS_PIN));
+    delay(500);
+    Serial.print(".");
   }
 
-  Serial.println("[SYSTEM] Setup completed.");
+  // Kết nối thành công
+  digitalWrite(LED_STATUS_PIN, HIGH);
+  Serial.println("\n[WIFI] Ket noi thanh cong!");
 }
 
-/* ========================================================
-   SETUP NOTES
-   - No Firebase.begin() call in setup().
-   - setup() returns quickly so loop() can start.
-   - Firebase task creation failure is reported on Serial.
-   ======================================================== */
-
-// ========================================================
-// 7. MAIN LOOP: FAST SENSOR MONITORING
-// ========================================================
-
 void loop() {
-  unsigned long now = millis();
-
-  // ------------------------------------------------------
-  // A. READ SENSOR AND PRINT EVERY 100 ms
-  // ------------------------------------------------------
-
-  if (now - lastSerialReadMs >= SERIAL_INTERVAL_MS) {
-    lastSerialReadMs = now;
-
-    // Read calibrated ADC voltage in millivolts
-    uint32_t voltageMilliVolts = analogReadMilliVolts(LDR_PIN);
-    float voltage = voltageMilliVolts / 1000.0f;
-
-    // Publish the latest sensor values to the Firebase task
-    portENTER_CRITICAL(&sensorMux);
-    ldrVoltage = voltage;
-    hasSensorReading = true;
-    portEXIT_CRITICAL(&sensorMux);
-
-    // Print independently of Firebase state
-    Serial.printf(
-      "[LDR] Voltage: %.3f V\n",
-      voltage
-    );
-  }
-
-  // ------------------------------------------------------
-  // B. REPORT WI-FI STATUS WITHOUT BLOCKING
-  // ------------------------------------------------------
-
   if (WiFi.status() == WL_CONNECTED) {
-    if (!wifiMessagePrinted) {
-      wifiMessagePrinted = true;
-      Serial.print("[WiFi] Connected. IP: ");
-      Serial.println(WiFi.localIP());
-    }
-  } else if (now - lastWiFiLogMs >= 3000) {
-    lastWiFiLogMs = now;
-    Serial.println("[WiFi] Still connecting...");
+    long rssi = WiFi.RSSI();
+    Serial.printf("[ONLINE] RSSI: %ld dBm\n", rssi);
+
+    // Xuất đồng thời 1 LED trạng thái và 3 LED mức sóng
+    xuatTrangThaiHeThong(true, rssi);
+  } else {
+    Serial.println("[OFFLINE] Mat ket noi! Dang ket noi lai...");
+    
+    // Tắt toàn bộ 4 LED khi mất mạng
+    xuatTrangThaiHeThong(false, 0);
+
+    WiFi.disconnect();
+    WiFi.reconnect();
   }
 
-  // No delay(): keep the sensor loop responsive.
+  delay(2000);
+}
+
+// Tắt toàn bộ 3 LED cột sóng
+void tatToanBoLedSong() {
+  digitalWrite(LED_WEAK_PIN, LOW);
+  digitalWrite(LED_MED_PIN, LOW);
+  digitalWrite(LED_STRONG_PIN, LOW);
+}
+
+void inTrangThaiGPIO(uint8_t status, uint8_t weak, uint8_t med, uint8_t strong) {
+  Serial.printf("  [GPIO OUTPUT] D15(STATUS): %d | D2(WEAK): %d | D4(MED): %d | D16(STRONG): %d\n",
+                status, weak, med, strong);
+}
+
+void xuatTrangThaiHeThong(bool daKetNoi, long rssi) {
+  static const char* const NHAN_COT_SONG[] = {
+    "KHONG DUNG DUOC (0/3 - Signal degraded)", // Level 0: < -90 dBm
+    "YEU (1/3)",                              // Level 1: -90 đến -71 dBm
+    "TRUNG BINH (2/3)",                       // Level 2: -70 đến -51 dBm
+    "MANH (3/3)"                              // Level 3: >= -50 dBm
+  };
+
+  uint8_t status = daKetNoi ? HIGH : LOW;
+  uint8_t level  = 0;
+
+  if (daKetNoi) {
+    if (rssi >= -50)      level = 3;
+    else if (rssi >= -70) level = 2;
+    else if (rssi >= -90) level = 1;
+    else                  level = 0;
+  }
+
+  // Tự động phân giải logic đèn dựa trên cấp độ sóng
+  uint8_t weak   = (level >= 1) ? HIGH : LOW;
+  uint8_t med    = (level >= 2) ? HIGH : LOW;
+  uint8_t strong = (level >= 3) ? HIGH : LOW;
+
+  // Ghi phần cứng tập trung (DRY) - không phân mảnh rải rác
+  digitalWrite(LED_STATUS_PIN, status);
+  digitalWrite(LED_WEAK_PIN,   weak);
+  digitalWrite(LED_MED_PIN,    med);
+  digitalWrite(LED_STRONG_PIN, strong);
+
+  // Xuất Serial tập trung
+  if (daKetNoi) {
+    Serial.printf("-> Cột sóng: %s\n", NHAN_COT_SONG[level]);
+  }
+  inTrangThaiGPIO(status, weak, med, strong);
 }
