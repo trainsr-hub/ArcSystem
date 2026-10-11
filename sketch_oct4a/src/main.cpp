@@ -1,109 +1,143 @@
-// src/main.cpp
-#include <WiFi.h>
+// path: _30.cpp
+
+/* ==========================================================================
+   SECTION 1: Nạp các thư viện cần thiết
+   ========================================================================== */
+#include <Arduino.h>
+#include <Firebase_ESP_Client.h>
+
+#if defined(ESP32)
+  #include <WiFi.h>
+#elif defined(ESP8266)
+  #include <ESP8266WiFi.h>
+#endif
+
+/* ==========================================================================
+   SECTION 2: Nạp các helper addons
+   ========================================================================== */
+//Provide the token generation process info.
+#include "addons/TokenHelper.h"
+//Provide the RTDB payload printing info and other helper functions.
+#include "addons/RTDBHelper.h"
+
 #include "secrets.h"
+/* >>> [THAY ĐỔI: TÁI SỬ DỤNG SECRETS.H]: 
+       Nạp file secrets.h để trích xuất các macro nhạy cảm (WIFI_SSID, 
+       WIFI_PASSWORD, API_KEY, DATABASE_URL) thay vì định nghĩa trực tiếp. <<< */
 
-const char* ssid     = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
+/* ==========================================================================
+   SECTION 3: Khai báo thông tin mạng Wi-Fi
+   ========================================================================== */
+// Đã khai báo trong secrets.h (WIFI_SSID, WIFI_PASSWORD)
+/* >>> [THAY ĐỔI SO VỚI BẢN TRƯỚC]:
+       Xóa bỏ 2 macro #define WIFI_SSID và #define WIFI_PASSWORD hardcode;
+       dữ liệu đã được nạp tự động qua file secrets.h. <<< */
 
-const int LED_STATUS_PIN = 15; // D15: LED trạng thái mạng
-const int LED_WEAK_PIN   = 2;  // D2:  LED mức 1 (Sóng yếu)
-const int LED_MED_PIN    = 4;  // D4:  LED mức 2 (Sóng trung bình)
-const int LED_STRONG_PIN = 16; // D16: LED mức 3 (Sóng mạnh)
+/* ==========================================================================
+   SECTION 4: Khai báo Firebase API Key
+   ========================================================================== */
+// Đã khai báo trong secrets.h (API_KEY)
+/* >>> [THAY ĐỔI SO VỚI BẢN TRƯỚC]:
+       Xóa bỏ macro #define API_KEY hardcode; dữ liệu được quản lý tập trung trong secrets.h. <<< */
 
-void tatToanBoLedSong();
-void xuatTrangThaiHeThong(bool daKetNoi, long rssi);
-void inTrangThaiGPIO(uint8_t status, uint8_t weak, uint8_t med, uint8_t strong);
+/* ==========================================================================
+   SECTION 5: Khai báo Firebase Realtime Database URL
+   ========================================================================== */
+// Đã khai báo trong secrets.h (DATABASE_URL)
+/* >>> [THAY ĐỔI SO VỚI BẢN TRƯỚC]:
+       Xóa bỏ macro #define DATABASE_URL hardcode; dữ liệu được quản lý tập trung trong secrets.h. <<< */
+
+/* ==========================================================================
+   SECTION 6: Khởi tạo đối tượng Firebase và các biến điều khiển
+   ========================================================================== */
+//Define Firebase Data object
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+unsigned long sendDataPrevMillis = 0;
+int count = 0;
+bool signupOK = false;
 
 void setup() {
+  /* ========================================================================
+     SECTION 7: Khởi tạo Serial và kết nối Wi-Fi
+     ======================================================================== */
   Serial.begin(115200);
-
-  pinMode(LED_STATUS_PIN, OUTPUT);
-  pinMode(LED_WEAK_PIN, OUTPUT);
-  pinMode(LED_MED_PIN, OUTPUT);
-  pinMode(LED_STRONG_PIN, OUTPUT);
-
-  digitalWrite(LED_STATUS_PIN, LOW);
-  tatToanBoLedSong();
-
-  Serial.println("\n--- Start ---");
-  WiFi.begin(ssid, password);
-
-  // Nhấp nháy LED STATUS khi đang dò mạng, 3 LED sóng tắt hoàn toàn
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED) {
-    digitalWrite(LED_STATUS_PIN, !digitalRead(LED_STATUS_PIN));
-    delay(500);
     Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  /* ========================================================================
+     SECTION 8: Gán API Key và RTDB URL vào cấu hình
+     ======================================================================== */
+  /* Assign the api key (required) */
+  config.api_key = API_KEY;
+  /* Assign the RTDB URL (required) */
+  config.database_url = DATABASE_URL;
+
+  /* ========================================================================
+     SECTION 9: Đăng ký nặc danh (Anonymous Sign-up)
+     ======================================================================== */
+  /* Sign up */
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("ok");
+    signupOK = true;
+  } else {
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
   }
 
-  // Kết nối thành công
-  digitalWrite(LED_STATUS_PIN, HIGH);
-  Serial.println("\n[WIFI] Ket noi thanh cong!");
+  /* ========================================================================
+     SECTION 10: Gán Callback kiểm tra Token và khởi động Firebase
+     ======================================================================== */
+  /* Assign the callback function for
+  the long running token generation task */
+  config.token_status_callback = tokenStatusCallback;
+  //see addons/TokenHelper.h
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
 }
 
 void loop() {
-  if (WiFi.status() == WL_CONNECTED) {
-    long rssi = WiFi.RSSI();
-    Serial.printf("[ONLINE] RSSI: %ld dBm\n", rssi);
+  /* ========================================================================
+     SECTION 11: Kiểm tra trạng thái và chu kỳ gửi dữ liệu (mỗi 15 giây)
+     ======================================================================== */
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 15000 || sendDataPrevMillis == 0)) {
 
-    // Xuất đồng thời 1 LED trạng thái và 3 LED mức sóng
-    xuatTrangThaiHeThong(true, rssi);
-  } else {
-    Serial.println("[OFFLINE] Mat ket noi! Dang ket noi lai...");
-    
-    // Tắt toàn bộ 4 LED khi mất mạng
-    xuatTrangThaiHeThong(false, 0);
+    /* ======================================================================
+       SECTION 12: Cập nhật mốc thời gian gửi dữ liệu
+       ====================================================================== */
+    sendDataPrevMillis = millis();
 
-    WiFi.disconnect();
-    WiFi.reconnect();
+    /* ======================================================================
+       SECTION 13: Ghi số nguyên tăng dần lên path test/int
+       ====================================================================== */
+    if (Firebase.RTDB.setInt(&fbdo, "test/int", count++)) {
+      Serial.println("PASSED");
+      Serial.println("PATH: " + fbdo.dataPath());
+      Serial.println("TYPE: " + fbdo.dataType());
+    } else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+    }
+
+    /* ======================================================================
+       SECTION 14: Ghi số thực ngẫu nhiên lên path test/float
+       ====================================================================== */
+    // Write an Float number on the database path test/float
+    if (Firebase.RTDB.setFloat(&fbdo, "test/float", 0.01 + random(0, 100))) {
+      Serial.println("PASSED");
+      Serial.println("PATH: " + fbdo.dataPath());
+      Serial.println("TYPE: " + fbdo.dataType());
+    } else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+    }
   }
-
-  delay(2000);
-}
-
-// Tắt toàn bộ 3 LED cột sóng
-void tatToanBoLedSong() {
-  digitalWrite(LED_WEAK_PIN, LOW);
-  digitalWrite(LED_MED_PIN, LOW);
-  digitalWrite(LED_STRONG_PIN, LOW);
-}
-
-void inTrangThaiGPIO(uint8_t status, uint8_t weak, uint8_t med, uint8_t strong) {
-  Serial.printf("  [GPIO OUTPUT] D15(STATUS): %d | D2(WEAK): %d | D4(MED): %d | D16(STRONG): %d\n",
-                status, weak, med, strong);
-}
-
-void xuatTrangThaiHeThong(bool daKetNoi, long rssi) {
-  static const char* const NHAN_COT_SONG[] = {
-    "KHONG DUNG DUOC (0/3 - Signal degraded)", // Level 0: < -90 dBm
-    "YEU (1/3)",                              // Level 1: -90 đến -71 dBm
-    "TRUNG BINH (2/3)",                       // Level 2: -70 đến -51 dBm
-    "MANH (3/3)"                              // Level 3: >= -50 dBm
-  };
-
-  uint8_t status = daKetNoi ? HIGH : LOW;
-  uint8_t level  = 0;
-
-  if (daKetNoi) {
-    if (rssi >= -50)      level = 3;
-    else if (rssi >= -70) level = 2;
-    else if (rssi >= -90) level = 1;
-    else                  level = 0;
-  }
-
-  // Tự động phân giải logic đèn dựa trên cấp độ sóng
-  uint8_t weak   = (level >= 1) ? HIGH : LOW;
-  uint8_t med    = (level >= 2) ? HIGH : LOW;
-  uint8_t strong = (level >= 3) ? HIGH : LOW;
-
-  // Ghi phần cứng tập trung (DRY) - không phân mảnh rải rác
-  digitalWrite(LED_STATUS_PIN, status);
-  digitalWrite(LED_WEAK_PIN,   weak);
-  digitalWrite(LED_MED_PIN,    med);
-  digitalWrite(LED_STRONG_PIN, strong);
-
-  // Xuất Serial tập trung
-  if (daKetNoi) {
-    Serial.printf("-> Cột sóng: %s\n", NHAN_COT_SONG[level]);
-  }
-  inTrangThaiGPIO(status, weak, med, strong);
 }
